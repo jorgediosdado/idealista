@@ -30,13 +30,19 @@ def load_config():
         return json.load(f)
 
 
+ROOMS_FILTERS = {
+    2: "de-dos-dormitorios,de-tres-dormitorios,de-cuatro-cinco-habitaciones-o-mas",
+    3: "de-tres-dormitorios,de-cuatro-cinco-habitaciones-o-mas",
+    4: "de-cuatro-cinco-habitaciones-o-mas",
+}
+
 def build_filters(cfg):
     parts = [
         f"con-precio-hasta_{cfg['max_price']}",
         f"metros-cuadrados-mas-de_{cfg['min_sqm']}",
     ]
-    if cfg.get("min_rooms"):
-        parts.append(f"habitaciones_{cfg['min_rooms']}")
+    if cfg.get("min_rooms") and cfg["min_rooms"] in ROOMS_FILTERS:
+        parts.append(ROOMS_FILTERS[cfg["min_rooms"]])
     return ",".join(parts)
 
 
