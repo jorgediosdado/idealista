@@ -1,80 +1,68 @@
 import re
-import sqlite3
+import requests
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from datetime import date
 
-DB_FILE = "listings.db"
+API_URL = "http://localhost:8000"
 
 st.set_page_config(page_title="Idealista A Coruña", layout="wide")
 
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
-@st.cache_data
-def load_price_history():
-    conn = sqlite3.connect(DB_FILE)
-    try:
-        df = pd.read_sql_query("SELECT * FROM price_history ORDER BY recorded_at DESC", conn)
-    except Exception:
-        df = pd.DataFrame(columns=["url", "price", "recorded_at"])
-    conn.close()
-    return df
-
-
-@st.cache_data
-def load_data():
-    conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql_query("SELECT * FROM listings", conn)
-    conn.close()
-
-    def parse_price(s):
-        if not s: return None
-        d = re.sub(r"[^\d]", "", s)
-        return int(d) if d else None
-
-    def parse_ppm(s):
-        if not s: return None
-        d = re.sub(r"[^\d]", "", s.split("€")[0])
-        return int(d) if d else None
-
-    MONTHS = {
-        "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
-        "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
-        "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
-    }
-
-    def parse_published(row):
-        s = row["published"]
-        ref = row["first_seen"]
-        if not s or not ref:
-            return None
-        s = s.lower()
-        m = re.search(r"(\d+)\s+de\s+(\w+)", s)
-        if m:
-            day = int(m.group(1))
-            month = MONTHS.get(m.group(2))
-            if month:
-                year = ref.year if month <= ref.month else ref.year - 1
-                try:
-                    from datetime import date
-                    return date(year, month, day)
-                except ValueError:
-                    pass
-        return None
-
-    df["price_num"]      = df["price"].apply(parse_price)
-    df["ppm_num"]        = df["price_per_sqm"].apply(parse_ppm)
-    df["first_seen"]     = pd.to_datetime(df["first_seen"])
-    df["published_date"]     = df.apply(parse_published, axis=1)
+@st.cache_data(ttl=60)
+def load_data() -> pd.DataFrame:
+    resp = requests.get(f"{API_URL}/listings", params={"limit": 500}, timeout=10)
+    resp.raise_for_status()
+    listings = resp.json()["listings"]
+    df = pd.DataFrame(listings)
+    df["first_seen"] = pd.to_datetime(df["first_seen"])
     df["neighbourhood_label"] = df["neighbourhood"].str.replace("-", " ").str.title()
-    df["full_url"] = "https://www.idealista.com" + df["url"]
+    df["published_date"] = df.apply(_parse_published, axis=1)
     return df
+
+
+@st.cache_data(ttl=60)
+def load_price_history() -> pd.DataFrame:
+    resp = requests.get(f"{API_URL}/price-history", timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    if not data:
+        return pd.DataFrame(columns=["url", "price", "recorded_at", "full_url"])
+    return pd.DataFrame(data)
+
+
+MONTHS = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
+    "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
+    "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
+}
+
+def _parse_published(row) -> date | None:
+    s = row.get("published")
+    ref = row.get("first_seen")
+    if not s or not ref:
+        return None
+    s = str(s).lower()
+    m = re.search(r"(\d+)\s+de\s+(\w+)", s)
+    if m:
+        day = int(m.group(1))
+        month = MONTHS.get(m.group(2))
+        if month:
+            ref_dt = pd.to_datetime(ref)
+            year = ref_dt.year if month <= ref_dt.month else ref_dt.year - 1
+            try:
+                return date(year, month, day)
+            except ValueError:
+                pass
+    return None
 
 
 df = load_data()
 
-# ── Sidebar filters ───────────────────────────────────────────────────────────
+# ── Sidebar ────────────────────────────────────────────────────────────────────
 
 st.sidebar.title("Filters")
 
@@ -84,20 +72,38 @@ selected_n = st.sidebar.multiselect("Neighbourhood", neighbourhoods, default=nei
 price_min, price_max = int(df["price_num"].min()), int(df["price_num"].max())
 price_range = st.sidebar.slider("Price (€)", price_min, price_max, (price_min, price_max), step=5000)
 
-elevator   = st.sidebar.checkbox("Elevator only", value=False)
-terrace    = st.sidebar.checkbox("Terrace only", value=False)
+elevator = st.sidebar.checkbox("Elevator only", value=False)
+terrace  = st.sidebar.checkbox("Terrace only", value=False)
+
+st.sidebar.divider()
+st.sidebar.subheader("Scraper")
+
+scraper_status = requests.get(f"{API_URL}/scraper/status", timeout=5).json()
+if scraper_status["running"]:
+    st.sidebar.warning("Scraper is running...")
+else:
+    last = scraper_status.get("last_run")
+    if last and last.get("finished_at"):
+        st.sidebar.caption(f"Last run: {last['finished_at'][:16]} · {last.get('new_listings', 0)} new")
+    if st.sidebar.button("Run scraper"):
+        r = requests.post(f"{API_URL}/scraper/run", timeout=5)
+        if r.status_code == 409:
+            st.sidebar.warning("Already running.")
+        else:
+            st.sidebar.success("Started!")
+            st.cache_data.clear()
 
 # ── Filter ────────────────────────────────────────────────────────────────────
 
 fdf = df[df["neighbourhood_label"].isin(selected_n)]
 fdf = fdf[fdf["price_num"].between(*price_range)]
-if elevator: fdf = fdf[fdf["has_elevator"] == 1]
-if terrace:  fdf = fdf[fdf["has_terrace"]  == 1]
+if elevator: fdf = fdf[fdf["has_elevator"] == True]
+if terrace:  fdf = fdf[fdf["has_terrace"]  == True]
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
 st.title("🏠 Idealista — A Coruña")
-st.caption(f"Data from listings.db · {len(df)} total listings scraped")
+st.caption(f"Via API · {len(df)} total listings")
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
@@ -134,7 +140,7 @@ with col_right:
     fig2.update_layout(margin=dict(t=20, b=20))
     st.plotly_chart(fig2, use_container_width=True)
 
-# ── Latest per neighbourhood ──────────────────────────────────────────────────
+# ── Latest per neighbourhood ───────────────────────────────────────────────────
 
 st.subheader("Latest listings by neighbourhood")
 
@@ -174,7 +180,7 @@ st.dataframe(
 
 st.divider()
 
-# ── Table ─────────────────────────────────────────────────────────────────────
+# ── All listings ───────────────────────────────────────────────────────────────
 
 st.subheader("All listings")
 
@@ -212,7 +218,6 @@ if not ph.empty:
     st.subheader("Price changes")
     ph_display = ph.copy()
     ph_display["recorded_at"] = pd.to_datetime(ph_display["recorded_at"]).dt.strftime("%Y-%m-%d")
-    ph_display["full_url"] = "https://www.idealista.com" + ph_display["url"]
     st.dataframe(
         ph_display[["recorded_at", "price", "full_url"]].rename(columns={
             "recorded_at": "date",
