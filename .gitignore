@@ -7,6 +7,8 @@ listings.db-shm
 scraper_state.json
 scraper.log
 screenshot.png
+*_test.png
 analysis.json
 new_listings.json
 *.html
+.claude/
