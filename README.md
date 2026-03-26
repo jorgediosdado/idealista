@@ -1,43 +1,65 @@
 # idealista-scraper
 
-Monitors Idealista property listings across selected A Coruña neighbourhoods. Detects new listings, tracks price changes, and exposes data via a Streamlit dashboard.
+Monitors Idealista property listings across selected A Coruña neighbourhoods. Detects new listings, tracks price changes, and exposes data via a REST API and Streamlit dashboard.
 
 ## Documentation
 
 - [Architecture and Operating Model](docs/architecture-and-operating-model.md)
 - [Data Model](docs/data-model.md)
+- [FastAPI Plan](docs/fastapi-plan.md)
 
 ## Components
 
-| File | Purpose |
+| File/Directory | Purpose |
 |---|---|
-| `scraper.py` | Playwright-based scraper — run manually to collect listings |
+| `scraper.py` | Playwright-based scraper — run manually or trigger via API |
 | `analyser.py` | CLI analysis tool — prints stats and exports `analysis.json` |
-| `dashboard.py` | Streamlit dashboard — interactive browser UI |
+| `dashboard.py` | Streamlit dashboard — reads from API |
+| `api/` | FastAPI backend — serves listings, stats, config, scraper control |
 | `config.json` | Search parameters (neighbourhoods, price, size, rooms) |
 | `listings.db` | SQLite database — all listings ever seen |
 
-## Usage
+## Running the system
 
-**Scrape:**
+**Step 1 — Start the API:**
+```bash
+python -m uvicorn api.main:app --reload
+```
+API runs on http://localhost:8000 · Interactive docs at http://localhost:8000/docs
+
+**Step 2 — Start the dashboard:**
+```bash
+python -m streamlit run dashboard.py --server.headless true
+```
+Dashboard runs on http://localhost:8501
+
+**Scrape manually (optional):**
 ```bash
 python scraper.py
 ```
+Or use the **Run scraper** button in the dashboard sidebar.
 
-**Analyse:**
+**Analyse (CLI):**
 ```bash
 python analyser.py          # last 7 days
 python analyser.py --days 30
 python analyser.py --all
 ```
 
-**Dashboard:**
-```bash
-python -m streamlit run dashboard.py --server.headless true
-```
-Then open http://localhost:8501
-
 To reset and re-scrape from scratch: delete `listings.db`.
+
+## API endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/listings` | All listings with filters (neighbourhood, price, elevator, etc.) |
+| `GET` | `/listings/{url_id}` | Single listing by URL |
+| `GET` | `/stats` | Aggregated stats (price range, avg €/m², by neighbourhood, etc.) |
+| `GET` | `/price-history` | Price change log |
+| `GET` | `/config` | Current search config |
+| `PUT` | `/config` | Update search config |
+| `POST` | `/scraper/run` | Trigger a scraper run |
+| `GET` | `/scraper/status` | Check if scraper is running + last run info |
 
 ## Search criteria
 
@@ -51,6 +73,8 @@ Configured in `config.json`:
   "min_rooms": 2
 }
 ```
+
+Can also be updated at runtime via `PUT /config`.
 
 **Current neighbourhoods:**
 - Ciudad Vieja - Centro
@@ -77,6 +101,6 @@ Idealista uses DataDome. `requests`, `httpx`, and `curl_cffi` are all blocked. P
 ## Dependencies
 
 ```bash
-pip install playwright pandas streamlit plotly
+pip install playwright pandas streamlit plotly fastapi "uvicorn[standard]" requests
 playwright install chromium
 ```

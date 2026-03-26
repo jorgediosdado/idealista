@@ -3,28 +3,36 @@
 ## System Architecture
 
 ```
-scraper.py
+scraper.py  ←──────────────────── POST /scraper/run (subprocess)
+     │
+     ▼
+listings.db  (SQLite, WAL mode)
+     │
+     ▼
+api/  (FastAPI + uvicorn, localhost:8000)
 │
-├── Browser layer (Playwright + Chromium, headless=False)
-│   ├── Search page tab      — navigates neighbourhood search result pages
-│   └── Detail page tab      — single shared tab reused for every detail page visit
-│
-├── Scraping layer
-│   ├── scrape_cards()       — extracts listing cards from a search results page
-│   └── get_detail()         — extracts full detail fields from a listing page
-│
-├── State layer (listings.db via SQLite)
-│   ├── init_db()            — creates schema on first use, migrates new columns
-│   ├── load_seen_ids()      — loads all known listing URLs from the DB
-│   └── upsert_listing()     — inserts new listings or updates price/last_seen
-│
-└── Config (config.json)
-    └── neighbourhoods, max_price, min_sqm, min_rooms
+├── routers/         — HTTP layer (listings, stats, price_history, config, scraper)
+├── services/        — business logic (queries, stats computation, scraper control)
+├── models/          — Pydantic schemas (request/response validation)
+└── database.py      — SQLite connection (WAL mode, row_factory)
+     │
+     ▼
+dashboard.py  (Streamlit, localhost:8501)
+     └── reads via requests to http://localhost:8000
 ```
+
+### API structure
+
+| Layer | Directory | Responsibility |
+|---|---|---|
+| Routers | `api/routers/` | HTTP endpoints — validate input, call services, return responses |
+| Services | `api/services/` | Business logic — DB queries, stats computation, subprocess management |
+| Models | `api/models/` | Pydantic schemas for request/response validation and serialisation |
+| Database | `api/database.py` | SQLite connection factory with WAL mode and row_factory |
 
 ### Why headless=False
 
-Idealista uses **DataDome** bot protection. Headless Chromium is detected via missing browser APIs and graphics capabilities. Running with a visible window (`headless=False`) bypasses this reliably.
+Idealista uses **DataDome** bot protection. Headless Chromium is detected via missing browser APIs and graphics capabilities. Running with a visible window (`headless=False`) bypasses this reliably. The scraper must run on a local machine — cloud execution is not viable.
 
 ### Anti-detection measures
 
@@ -68,16 +76,19 @@ For each neighbourhood:
         Visit detail page → extract all fields
         Insert into listings.db
       If URL already in DB → update price + last_seen only
+        If price changed → log old price to price_history
     Stop early if a full page has no new listings
 ```
 
-Paginates up to `MAX_PAGES` pages (configurable at the top of `scraper.py`) rather than just page 1. This handles the case where Idealista surfaces updated listings (price changes, re-listings) on page 1, which can push genuinely new listings to page 2 or 3.
+Paginates up to `MAX_PAGES` pages (configurable at the top of `scraper.py`). Idealista sorts by "most recently active" — a listing that drops its price gets bumped to page 1, potentially pushing a new listing to page 2 or 3. Checking up to 3 pages catches these cases without making runs slow.
 
-Only visits detail pages for new listings — existing listings get price and `last_seen` updated from the card alone, keeping runs fast.
+### Triggering a run
 
-### Why not just page 1?
+The scraper can be started in two ways:
+1. **Manually:** `python scraper.py`
+2. **Via API:** `POST /scraper/run` — launches `scraper.py` as a subprocess; returns 409 if already running
 
-Idealista sorts by "most recently active", not strictly "most recently published". A listing that drops its price gets bumped back to page 1, potentially displacing a brand new listing. Checking up to 3 pages catches these edge cases without making runs too slow.
+The scraper writes a `scraper_state.json` file at start and finish. The API reads this file to report last run time and new listing count via `GET /scraper/status`.
 
 ---
 
@@ -94,10 +105,8 @@ https://www.idealista.com/venta-viviendas/a-coruna/{neighbourhood}/{filters}/pag
 ### Filter format
 
 ```
-con-precio-hasta_{max_price},metros-cuadrados-mas-de_{min_sqm},habitaciones_{min_rooms}
+con-precio-hasta_{max_price},metros-cuadrados-mas-de_{min_sqm},de-dos-dormitorios,de-tres-dormitorios,de-cuatro-cinco-habitaciones-o-mas
 ```
-
-Example: `con-precio-hasta_450000,metros-cuadrados-mas-de_90,habitaciones_2`
 
 ### Configured neighbourhoods
 
