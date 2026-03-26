@@ -3,23 +3,23 @@
 ## System Architecture
 
 ```
-test_scraper.py
+scraper.py
 │
-├── Browser layer (Playwright + Chromium)
+├── Browser layer (Playwright + Chromium, headless=False)
 │   ├── Search page tab      — navigates neighbourhood search result pages
-│   └── Detail page tab      — shared tab reused for every detail page visit
+│   └── Detail page tab      — single shared tab reused for every detail page visit
 │
 ├── Scraping layer
 │   ├── scrape_cards()       — extracts listing cards from a search results page
-│   └── get_detail()         — extracts publish date + description from a detail page
+│   └── get_detail()         — extracts full detail fields from a listing page
 │
-├── State layer (SQLite)
-│   ├── init_db()            — creates listings.db and schema on first use
+├── State layer (listings.db via SQLite)
+│   ├── init_db()            — creates schema on first use, migrates new columns
 │   ├── load_seen_ids()      — loads all known listing URLs from the DB
 │   └── upsert_listing()     — inserts new listings or updates price/last_seen
 │
-└── Output
-    └── new_listings.json    — current run's new listings (convenience file)
+└── Config (config.json)
+    └── neighbourhoods, max_price, min_sqm, min_rooms
 ```
 
 ### Why headless=False
@@ -43,47 +43,61 @@ Idealista uses **DataDome** bot protection. Headless Chromium is detected via mi
 
 ## Operating Model
 
-### First run (no `listings.db` or empty)
+### First run (empty or missing `listings.db`)
 
 ```
 For each neighbourhood:
-  Page 1, 2, 3, ... (sorted by newest first)
+  Page 1, 2, 3, ... (sorted newest first)
     For each listing card:
-      Visit detail page → get publish date + description
-      If published within last 30 days → add to new_listings.json
-      Always → persist to listings.db
-    If no listing on this page is recent → stop paginating this neighbourhood
+      If URL not in DB:
+        Visit detail page → extract all fields
+        Insert into listings.db
+    Stop paginating when a full page has no new listings
+    (Idealista loops back to page 1 when results are exhausted)
 ```
 
-This seeds the database with all known listings and gives the user a meaningful first result set (last 30 days only, not hundreds of stale listings).
+Seeds the database with all currently available listings across all pages.
 
 ### Subsequent runs
 
 ```
 For each neighbourhood:
-  Page 1 only (new listings always appear at the top, sorted by date)
+  Page 1, 2, ... up to MAX_PAGES (default: 3)
     For each listing card:
-      If URL not in listings.db → new listing
-        Visit detail page → get publish date + description
-        Add to new_listings.json
+      If URL not in DB → new listing
+        Visit detail page → extract all fields
         Insert into listings.db
-      If URL already in listings.db → update price + last_seen
+      If URL already in DB → update price + last_seen only
+    Stop early if a full page has no new listings
 ```
 
-Only visits detail pages for genuinely new listings, keeping each run fast (~5–10 seconds per neighbourhood on a quiet day).
+Paginates up to `MAX_PAGES` pages (configurable at the top of `scraper.py`) rather than just page 1. This handles the case where Idealista surfaces updated listings (price changes, re-listings) on page 1, which can push genuinely new listings to page 2 or 3.
 
-### Scheduling
+Only visits detail pages for new listings — existing listings get price and `last_seen` updated from the card alone, keeping runs fast.
 
-The script is designed to run twice a day via **Windows Task Scheduler** (08:00 and 20:00). See `README.md` for the setup commands.
+### Why not just page 1?
 
-### URL structure
+Idealista sorts by "most recently active", not strictly "most recently published". A listing that drops its price gets bumped back to page 1, potentially displacing a brand new listing. Checking up to 3 pages catches these edge cases without making runs too slow.
+
+---
+
+## URL structure
 
 ```
-https://www.idealista.com/venta-viviendas/a-coruna/{neighbourhood}/{filters}/
-https://www.idealista.com/venta-viviendas/a-coruna/{neighbourhood}/{filters}/pagina-{n}.htm
+# Page 1
+https://www.idealista.com/venta-viviendas/a-coruna/{neighbourhood}/{filters}/?ordenado-por=fecha-publicacion-desc
+
+# Page N
+https://www.idealista.com/venta-viviendas/a-coruna/{neighbourhood}/{filters}/pagina-{n}.htm?ordenado-por=fecha-publicacion-desc
 ```
 
-Sort parameter appended as query string: `?ordenado-por=fecha-publicacion-desc`
+### Filter format
+
+```
+con-precio-hasta_{max_price},metros-cuadrados-mas-de_{min_sqm},habitaciones_{min_rooms}
+```
+
+Example: `con-precio-hasta_450000,metros-cuadrados-mas-de_90,habitaciones_2`
 
 ### Configured neighbourhoods
 
@@ -93,3 +107,5 @@ Sort parameter appended as query string: `?ordenado-por=fecha-publicacion-desc`
 | `ensanche-juan-florez` | Ensanche - Juan Flórez |
 | `riazor-visma` | Riazor - Visma |
 | `monte-alto-zalaeta-atocha` | Monte Alto - Zalaeta - Atocha |
+| `cuatro-caminos-plaza-de-la-cubela` | Cuatro Caminos - Plaza de la Cubela |
+| `agra-del-orzan-ventorrillo` | Agra del Orzán - Ventorrillo |

@@ -1,94 +1,82 @@
 # idealista-scraper
 
+Monitors Idealista property listings across selected A Coruña neighbourhoods. Detects new listings, tracks price changes, and exposes data via a Streamlit dashboard.
+
 ## Documentation
 
 - [Architecture and Operating Model](docs/architecture-and-operating-model.md)
 - [Data Model](docs/data-model.md)
 
-Monitors Idealista property listings across selected A Coruña neighbourhoods and flags new ones matching configured criteria. Runs via Windows Task Scheduler twice a day.
+## Components
 
-## How it works
-
-**First run** (no `seen_ids.json`):
-1. Paginates all pages across every configured neighbourhood
-2. Visits each listing's detail page to get publish date and full description
-3. Includes only listings published in the last 30 days in `new_listings.json`
-4. Saves all seen listing IDs to `seen_ids.json`
-
-**Subsequent runs:**
-1. Scrapes page 1 of each neighbourhood (new listings always appear at the top, sorted by date)
-2. For listings not in `seen_ids.json`: visits detail page to get publish date and description
-3. Writes only new listings to `new_listings.json`
+| File | Purpose |
+|---|---|
+| `scraper.py` | Playwright-based scraper — run manually to collect listings |
+| `analyser.py` | CLI analysis tool — prints stats and exports `analysis.json` |
+| `dashboard.py` | Streamlit dashboard — interactive browser UI |
+| `config.json` | Search parameters (neighbourhoods, price, size, rooms) |
+| `listings.db` | SQLite database — all listings ever seen |
 
 ## Usage
 
+**Scrape:**
 ```bash
-python test_scraper.py
+python scraper.py
 ```
 
-To reset and re-run as if fresh: delete `listings.db`.
-
-## Output files
-
-| File | Description |
-|---|---|
-| `listings.db` | SQLite database — all listings ever seen, with full history |
-| `new_listings.json` | New listings since last run — convenience output for the current run |
-
-### Database schema
-
-```
-listings(url, neighbourhood, title, price, details, published, description, first_seen, last_seen)
+**Analyse:**
+```bash
+python analyser.py          # last 7 days
+python analyser.py --days 30
+python analyser.py --all
 ```
 
-- `url` — primary key (`/inmueble/123456/`)
-- `first_seen` / `last_seen` — ISO datetimes; `last_seen` is updated on every run
-- `price` — updated on every run (tracks price changes over time)
+**Dashboard:**
+```bash
+python -m streamlit run dashboard.py --server.headless true
+```
+Then open http://localhost:8501
 
-To reset and re-run as if fresh: delete `listings.db`.
+To reset and re-scrape from scratch: delete `listings.db`.
 
-## Current search criteria
+## Search criteria
 
-- **Neighbourhoods:** Ciudad Vieja - Centro, Ensanche - Juan Flórez, Riazor - Visma, Monte Alto - Zalaeta - Atocha
-- **Max price:** 450,000€
-- **Min size:** 90 m²
-- **Sorted by:** most recently published first
+Configured in `config.json`:
 
-### Changing neighbourhoods
+```json
+{
+  "neighbourhoods": [...],
+  "max_price": 450000,
+  "min_sqm": 90,
+  "min_rooms": 2
+}
+```
 
-Edit the `NEIGHBOURHOODS` list in `test_scraper.py`. Use the neighbourhood slug from the Idealista URL:
+**Current neighbourhoods:**
+- Ciudad Vieja - Centro
+- Ensanche - Juan Flórez
+- Riazor - Visma
+- Monte Alto - Zalaeta - Atocha
+- Cuatro Caminos - Plaza de la Cubela
+- Agra del Orzán - Ventorrillo
 
+To add a neighbourhood, find its slug in the Idealista URL:
 ```
 https://www.idealista.com/venta-viviendas/a-coruna/{neighbourhood-slug}/
 ```
 
-### Changing price / size filters
-
-Edit `FILTERS` in `test_scraper.py`:
-
-```
-con-precio-hasta_{max},metros-cuadrados-mas-de_{min}
-```
-
-## Scheduling (Windows Task Scheduler)
-
-Run the following in an **elevated** command prompt to schedule twice-daily execution:
-
-```cmd
-schtasks /create /tn "IdealistaScraper-AM" /tr "python C:\Users\Jorge\idealista-scraper\test_scraper.py" /sc DAILY /st 08:00 /f
-schtasks /create /tn "IdealistaScraper-PM" /tr "python C:\Users\Jorge\idealista-scraper\test_scraper.py" /sc DAILY /st 20:00 /f
-```
-
 ## Bot protection notes
 
-Idealista uses DataDome. The following do not work: `requests`, `httpx`, `curl_cffi`. Playwright with `headless=False` works reliably. Key bypasses applied:
+Idealista uses DataDome. `requests`, `httpx`, and `curl_cffi` are all blocked. Playwright with `headless=False` works reliably. Key bypasses applied:
 - `navigator.webdriver` set to `undefined`
 - Real Chrome user agent + Spanish locale
 - `--disable-blink-features=AutomationControlled`
-- Random delays between requests (3–8s per detail page, 4–10s between neighbourhoods)
-- Single shared browser tab for detail page visits
+- Random delays (3–8s per detail page, 4–10s between neighbourhoods)
+- Single shared browser tab reused for all detail page visits
 
 ## Dependencies
 
-- Python 3.x
-- `playwright` — `pip install playwright && playwright install chromium`
+```bash
+pip install playwright pandas streamlit plotly
+playwright install chromium
+```

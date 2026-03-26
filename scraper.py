@@ -20,6 +20,7 @@ DB_FILE     = "listings.db"
 BASE_URL    = "https://www.idealista.com"
 SORT        = "?ordenado-por=fecha-publicacion-desc"
 TEST_LIMIT  = None   # set to 5 for test mode
+MAX_PAGES   = 3      # max pages to check on regular runs
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -321,13 +322,14 @@ def scrape_neighbourhood(page, detail_page, seen_ids, neighbourhood, filters, fi
             else:
                 upsert_listing(entry, neighbourhood)  # update price + last_seen
 
-        # On regular runs only check page 1
-        if not first_run:
-            break
-
-        # Stop if Idealista looped back (all listings already seen)
+        # Stop if all listings on this page are already known
         if new_on_page == 0:
             print(f"  No new listings on page {page_num}, stopping.")
+            break
+
+        # On regular runs cap at MAX_PAGES; first run goes until exhausted
+        if not first_run and page_num >= MAX_PAGES:
+            print(f"  Reached page limit ({MAX_PAGES}), stopping.")
             break
 
         page_num += 1
