@@ -362,12 +362,19 @@ def scrape_neighbourhood(page, detail_page, seen_ids, neighbourhood, filters, fi
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def write_state(state: dict):
+    with open("scraper_state.json", "w", encoding="utf-8") as f:
+        json.dump(state, f)
+
+
 def run():
     cfg     = load_config()
     filters = build_filters(cfg)
     init_db()
     first_run = is_first_run()
     seen_ids  = load_seen_ids()
+
+    write_state({"started_at": datetime.now().isoformat(), "finished_at": None, "new_listings": None, "exit_code": None})
 
     print(f"Config: max_price={cfg['max_price']}€, min_sqm={cfg['min_sqm']}m², "
           f"{len(cfg['neighbourhoods'])} neighbourhood(s)")
@@ -411,6 +418,7 @@ def run():
         browser.close()
 
     print(f"\nDone. {total_new} new listing(s) added to {DB_FILE}.")
+    write_state({"started_at": None, "finished_at": datetime.now().isoformat(), "new_listings": total_new, "exit_code": 0})
 
 
 if __name__ == "__main__":

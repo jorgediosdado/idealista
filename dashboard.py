@@ -78,25 +78,43 @@ terrace  = st.sidebar.checkbox("Terrace only", value=False)
 st.sidebar.divider()
 st.sidebar.subheader("Scraper")
 
+if "scraping" not in st.session_state:
+    st.session_state.scraping = False
+
 scraper_status = requests.get(f"{API_URL}/scraper/status", timeout=5).json()
-if scraper_status["running"]:
-    st.sidebar.warning("Scraper is running...")
+
+if st.session_state.scraping:
+    if scraper_status["running"]:
+        with st.sidebar.status("Scraper running...", expanded=True) as status:
+            log_text = requests.get(f"{API_URL}/scraper/log", timeout=5).text
+            st.code(log_text or "Starting...", language=None)
+        import time; time.sleep(3); st.rerun()
+    else:
+        # Just finished
+        st.session_state.scraping = False
+        st.cache_data.clear()
+        last = scraper_status.get("last_run") or {}
+        new_n = last.get("new_listings", 0)
+        if new_n:
+            st.sidebar.success(f"Done! {new_n} new listing(s) found.")
+        else:
+            st.sidebar.info("Done. No new listings.")
+        log_text = requests.get(f"{API_URL}/scraper/log", timeout=5).text
+        if log_text.strip():
+            with st.sidebar.expander("Run log"):
+                st.code(log_text, language=None)
 else:
     last = scraper_status.get("last_run")
     if last and last.get("finished_at"):
-        st.sidebar.caption(f"Last run: {last['finished_at'][:16]} · {last.get('new_listings', 0)} new")
+        new_n = last.get("new_listings", 0)
+        st.sidebar.caption(f"Last run: {last['finished_at'][:16]} · {new_n} new listing(s)")
     if st.sidebar.button("Run scraper"):
         r = requests.post(f"{API_URL}/scraper/run", timeout=5)
         if r.status_code == 409:
             st.sidebar.warning("Already running.")
         else:
-            st.sidebar.success("Started!")
-            st.cache_data.clear()
-
-log_text = requests.get(f"{API_URL}/scraper/log", timeout=5).text
-if log_text.strip():
-    with st.sidebar.expander("Last run log"):
-        st.code(log_text, language=None)
+            st.session_state.scraping = True
+            st.rerun()
 
 # ── Filter ────────────────────────────────────────────────────────────────────
 
@@ -152,25 +170,24 @@ st.subheader("Latest listings by neighbourhood")
 n_latest = st.slider("Show last N per neighbourhood", 1, 10, 3)
 
 latest = (
-    fdf.sort_values("first_seen", ascending=False)
+    fdf.dropna(subset=["published_date"])
+       .sort_values("published_date", ascending=False)
        .groupby("neighbourhood_label")
        .head(n_latest)
-       .sort_values(["neighbourhood_label", "first_seen"], ascending=[True, False])
+       .sort_values(["neighbourhood_label", "published_date"], ascending=[True, False])
 )
 
 latest_display = latest[[
-    "neighbourhood_label", "first_seen", "title", "price", "price_per_sqm",
-    "details", "has_elevator", "has_terrace", "published_date", "full_url"
+    "neighbourhood_label", "published_date", "title", "price", "price_per_sqm",
+    "details", "has_elevator", "has_terrace", "full_url"
 ]].rename(columns={
     "neighbourhood_label": "neighbourhood",
-    "first_seen": "seen",
+    "published_date": "published",
     "price_per_sqm": "€/m²",
     "has_elevator": "elevator",
     "has_terrace": "terrace",
-    "published_date": "published",
     "full_url": "url",
 })
-latest_display["seen"] = latest_display["seen"].dt.strftime("%Y-%m-%d")
 
 st.dataframe(
     latest_display,

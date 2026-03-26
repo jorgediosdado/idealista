@@ -42,12 +42,15 @@ def run_scraper() -> ScraperRunResponse:
     started_at = datetime.now().isoformat()
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     log_path = os.path.join(project_root, LOG_FILE)
-    log_file = open(log_path, "w", encoding="utf-8")
+    log_file = open(log_path, "w", encoding="utf-8", errors="replace")
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
     _process = subprocess.Popen(
-        [sys.executable, "scraper.py"],
+        [sys.executable, "-u", "scraper.py"],
         cwd=project_root,
         stdout=log_file,
         stderr=subprocess.STDOUT,
+        env=env,
     )
     return ScraperRunResponse(status="started", started_at=started_at)
 

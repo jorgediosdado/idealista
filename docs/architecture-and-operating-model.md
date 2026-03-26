@@ -3,7 +3,7 @@
 ## System Architecture
 
 ```
-scraper.py  ←──────────────────── POST /scraper/run (subprocess)
+scraper.py  ←── POST /scraper/run (subprocess, unbuffered stdout → scraper.log)
      │
      ▼
 listings.db  (SQLite, WAL mode)
@@ -12,8 +12,8 @@ listings.db  (SQLite, WAL mode)
 api/  (FastAPI + uvicorn, localhost:8000)
 │
 ├── routers/         — HTTP layer (listings, stats, price_history, config, scraper)
-├── services/        — business logic (queries, stats computation, scraper control)
-├── models/          — Pydantic schemas (request/response validation)
+├── services/        — business logic (queries, stats, subprocess management)
+├── models/          — Pydantic schemas
 └── database.py      — SQLite connection (WAL mode, row_factory)
      │
      ▼
@@ -21,18 +21,18 @@ dashboard.py  (Streamlit, localhost:8501)
      └── reads via requests to http://localhost:8000
 ```
 
-### API structure
+### API layer structure
 
 | Layer | Directory | Responsibility |
 |---|---|---|
 | Routers | `api/routers/` | HTTP endpoints — validate input, call services, return responses |
-| Services | `api/services/` | Business logic — DB queries, stats computation, subprocess management |
-| Models | `api/models/` | Pydantic schemas for request/response validation and serialisation |
-| Database | `api/database.py` | SQLite connection factory with WAL mode and row_factory |
+| Services | `api/services/` | Business logic — DB queries, stats, scraper subprocess control |
+| Models | `api/models/` | Pydantic schemas for validation and serialisation |
+| Database | `api/database.py` | SQLite connection factory (WAL mode, row_factory) |
 
 ### Why headless=False
 
-Idealista uses **DataDome** bot protection. Headless Chromium is detected via missing browser APIs and graphics capabilities. Running with a visible window (`headless=False`) bypasses this reliably. The scraper must run on a local machine — cloud execution is not viable.
+Idealista uses **DataDome** bot protection. Headless Chromium is detected and blocked. Running with a visible window (`headless=False`) bypasses this reliably. The scraper must run on a local machine — cloud execution is not viable.
 
 ### Anti-detection measures
 
@@ -45,7 +45,7 @@ Idealista uses **DataDome** bot protection. Headless Chromium is detected via mi
 | Real user agent | Chrome 124 on Windows 11 |
 | Spanish locale | `locale="es-ES"` |
 | Random delays | 3–8s between detail pages, 5–9s between search pages, 4–10s between neighbourhoods |
-| Shared detail tab | Single tab reused for all detail visits — avoids rapid tab open/close pattern |
+| Shared detail tab | Single tab reused for all detail visits |
 
 ---
 
@@ -61,10 +61,9 @@ For each neighbourhood:
         Visit detail page → extract all fields
         Insert into listings.db
     Stop paginating when a full page has no new listings
-    (Idealista loops back to page 1 when results are exhausted)
 ```
 
-Seeds the database with all currently available listings across all pages.
+Seeds the database with all currently available listings.
 
 ### Subsequent runs
 
@@ -80,15 +79,31 @@ For each neighbourhood:
     Stop early if a full page has no new listings
 ```
 
-Paginates up to `MAX_PAGES` pages (configurable at the top of `scraper.py`). Idealista sorts by "most recently active" — a listing that drops its price gets bumped to page 1, potentially pushing a new listing to page 2 or 3. Checking up to 3 pages catches these cases without making runs slow.
+Paginates up to `MAX_PAGES` pages. Idealista sorts by "most recently active" — a listing that drops its price gets bumped to page 1, potentially pushing a new listing to page 2 or 3. Checking up to 3 pages catches these cases.
+
+### Scraper state
+
+At the start of each run, `scraper.py` writes:
+```json
+{ "started_at": "2026-03-26T08:00:00", "finished_at": null, "new_listings": null, "exit_code": null }
+```
+
+At the end:
+```json
+{ "started_at": null, "finished_at": "2026-03-26T08:18:42", "new_listings": 3, "exit_code": 0 }
+```
+
+The API reads this file via `GET /scraper/status`. The dashboard polls this endpoint every 3 seconds while a run is in progress, showing a live log and a summary when done.
 
 ### Triggering a run
 
-The scraper can be started in two ways:
-1. **Manually:** `python scraper.py`
-2. **Via API:** `POST /scraper/run` — launches `scraper.py` as a subprocess; returns 409 if already running
+Two ways:
+1. **Dashboard sidebar** — "Run scraper" button → `POST /scraper/run` → subprocess launched with unbuffered stdout (`-u`) piped to `scraper.log`
+2. **Manually** — `python scraper.py` in a terminal
 
-The scraper writes a `scraper_state.json` file at start and finish. The API reads this file to report last run time and new listing count via `GET /scraper/status`.
+### Scheduling
+
+Windows Task Scheduler runs `scraper.py` at 08:00 and 20:00. The machine must be on and logged in (not sleeping).
 
 ---
 
