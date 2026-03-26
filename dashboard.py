@@ -93,6 +93,11 @@ else:
             st.sidebar.success("Started!")
             st.cache_data.clear()
 
+log_text = requests.get(f"{API_URL}/scraper/log", timeout=5).text
+if log_text.strip():
+    with st.sidebar.expander("Last run log"):
+        st.code(log_text, language=None)
+
 # ── Filter ────────────────────────────────────────────────────────────────────
 
 fdf = df[df["neighbourhood_label"].isin(selected_n)]

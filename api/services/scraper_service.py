@@ -7,6 +7,7 @@ from typing import Optional
 from api.models.scraper import ScraperStatus, ScraperRunResponse, LastRun
 
 STATE_FILE = "scraper_state.json"
+LOG_FILE   = "scraper.log"
 
 _process: Optional[subprocess.Popen] = None
 
@@ -39,8 +40,23 @@ def run_scraper() -> ScraperRunResponse:
         raise RuntimeError("Scraper is already running")
 
     started_at = datetime.now().isoformat()
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    log_path = os.path.join(project_root, LOG_FILE)
+    log_file = open(log_path, "w", encoding="utf-8")
     _process = subprocess.Popen(
         [sys.executable, "scraper.py"],
-        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        cwd=project_root,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
     )
     return ScraperRunResponse(status="started", started_at=started_at)
+
+
+def get_log(last_n_lines: int = 100) -> str:
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    log_path = os.path.join(project_root, LOG_FILE)
+    if not os.path.exists(log_path):
+        return ""
+    with open(log_path, encoding="utf-8") as f:
+        lines = f.readlines()
+    return "".join(lines[-last_n_lines:])

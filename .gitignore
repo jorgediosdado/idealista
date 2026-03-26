@@ -5,6 +5,7 @@ listings.db
 listings.db-wal
 listings.db-shm
 scraper_state.json
+scraper.log
 screenshot.png
 analysis.json
 new_listings.json
