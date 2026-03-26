@@ -12,6 +12,17 @@ st.set_page_config(page_title="Idealista A Coruña", layout="wide")
 # ── Data ──────────────────────────────────────────────────────────────────────
 
 @st.cache_data
+def load_price_history():
+    conn = sqlite3.connect(DB_FILE)
+    try:
+        df = pd.read_sql_query("SELECT * FROM price_history ORDER BY recorded_at DESC", conn)
+    except Exception:
+        df = pd.DataFrame(columns=["url", "price", "recorded_at"])
+    conn.close()
+    return df
+
+
+@st.cache_data
 def load_data():
     conn = sqlite3.connect(DB_FILE)
     df = pd.read_sql_query("SELECT * FROM listings", conn)
@@ -192,3 +203,22 @@ st.dataframe(
         "terrace":  st.column_config.CheckboxColumn(),
     }
 )
+
+# ── Price history ──────────────────────────────────────────────────────────────
+
+ph = load_price_history()
+if not ph.empty:
+    st.divider()
+    st.subheader("Price changes")
+    ph_display = ph.copy()
+    ph_display["recorded_at"] = pd.to_datetime(ph_display["recorded_at"]).dt.strftime("%Y-%m-%d")
+    ph_display["full_url"] = "https://www.idealista.com" + ph_display["url"]
+    st.dataframe(
+        ph_display[["recorded_at", "price", "full_url"]].rename(columns={
+            "recorded_at": "date",
+            "full_url": "url",
+        }),
+        use_container_width=True,
+        hide_index=True,
+        column_config={"url": st.column_config.LinkColumn("url")},
+    )

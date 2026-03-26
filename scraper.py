@@ -90,6 +90,13 @@ def init_db():
                 last_seen     TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS price_history (
+                url         TEXT,
+                price       TEXT,
+                recorded_at TEXT
+            )
+        """)
         # Migrate: add new columns if they don't exist yet
         existing = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
         for col, col_type in NEW_COLUMNS:
@@ -116,9 +123,19 @@ def upsert_listing(entry, neighbourhood):
             "SELECT url FROM listings WHERE url = ?", (entry["url"],)
         ).fetchone()
         if exists:
+            current_price = conn.execute(
+                "SELECT price FROM listings WHERE url = ?", (entry["url"],)
+            ).fetchone()[0]
+            new_price = entry.get("price")
+            if new_price and new_price != current_price:
+                conn.execute(
+                    "INSERT INTO price_history (url, price, recorded_at) VALUES (?, ?, ?)",
+                    (entry["url"], current_price, now),
+                )
+                print(f"    [PRICE] {current_price} → {new_price}")
             conn.execute(
                 "UPDATE listings SET last_seen = ?, price = ? WHERE url = ?",
-                (now, entry.get("price"), entry["url"]),
+                (now, new_price, entry["url"]),
             )
         else:
             conn.execute(
